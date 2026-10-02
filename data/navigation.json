@@ -1,0 +1,83 @@
+[
+  {
+    "name": "KnowledgeBase",
+    "slug": "knowledge-base",
+    "sortOrder": 1,
+    "modules": [
+      {
+        "name": "Strapi Production Pipeline",
+        "slug": "strapi-production-pipeline",
+        "sortOrder": 1,
+        "tasks": [
+          {
+            "title": "Create the Postgres Database in Neon",
+            "slug": "create-the-postgres-database-in-neon",
+            "sortOrder": 1,
+            "path": "/docs/knowledge-base/strapi-production-pipeline/create-the-postgres-database-in-neon"
+          },
+          {
+            "title": "Setting Up the Backend with Strapi",
+            "slug": "setting-up-the-backend-with-strapi",
+            "sortOrder": 2,
+            "path": "/docs/knowledge-base/strapi-production-pipeline/setting-up-the-backend-with-strapi"
+          },
+          {
+            "title": "Design the Strapi Content Model",
+            "slug": "design-the-strapi-content-model",
+            "sortOrder": 3,
+            "path": "/docs/knowledge-base/strapi-production-pipeline/design-the-strapi-content-model"
+          },
+          {
+            "title": "Deploy Strapi to Render",
+            "slug": "deploy-strapi-to-render",
+            "sortOrder": 4,
+            "path": "/docs/knowledge-base/strapi-production-pipeline/deploy-strapi-to-render"
+          },
+          {
+            "title": "Keep Strapi Awake on Render Free",
+            "slug": "keep-strapi-awake-on-render-free",
+            "sortOrder": 5,
+            "path": "/docs/knowledge-base/strapi-production-pipeline/keep-strapi-awake-on-render-free"
+          },
+          {
+            "title": "Manage Documentation Content in Strapi",
+            "slug": "manage-documentation-content-in-strapi",
+            "sortOrder": 6,
+            "path": "/docs/knowledge-base/strapi-production-pipeline/manage-documentation-content-in-strapi"
+          }
+        ]
+      },
+      {
+        "name": "Frontend: Zero to Production-Ready",
+        "slug": "frontend-zero-to-production-ready",
+        "sortOrder": 2,
+        "tasks": [
+          {
+            "title": "Docusaurus Foundation",
+            "slug": "docusaurus-foundation",
+            "sortOrder": 1,
+            "path": "/docs/knowledge-base/frontend-zero-to-production-ready/docusaurus-foundation"
+          },
+          {
+            "title": "Strapi-to-Docusaurus Documentation Pipeline",
+            "slug": "strapi-to-docusaurus-documentation-pipeline",
+            "sortOrder": 2,
+            "path": "/docs/knowledge-base/frontend-zero-to-production-ready/strapi-to-docusaurus-documentation-pipeline"
+          },
+          {
+            "title": "UI Customization & Navigation",
+            "slug": "ui-customization-and-navigation",
+            "sortOrder": 3,
+            "path": "/docs/knowledge-base/frontend-zero-to-production-ready/ui-customization-and-navigation"
+          },
+          {
+            "title": "Production & Deployment",
+            "slug": "production-and-deployment-automation",
+            "sortOrder": 4,
+            "path": "/docs/knowledge-base/frontend-zero-to-production-ready/production-and-deployment-automation"
+          }
+        ]
+      }
+    ]
+  }
+]

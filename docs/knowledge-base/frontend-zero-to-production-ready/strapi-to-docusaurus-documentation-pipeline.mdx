@@ -1,0 +1,1949 @@
+---
+title: "Strapi-to-Docusaurus Documentation Pipeline"
+sidebar_label: "Strapi-to-Docusaurus Documentation Pipeline"
+root_name: "KnowledgeBase"
+child_name: "Frontend: Zero to Production-Ready"
+---
+
+import { Accordion, AccordionItem, AccordionTrigger, AccordionContent } from "@/components/ui/accordion";
+
+## Strapi Documentation Pipeline
+
+> **Build an automated Strapi-to-Docusaurus pipeline that transforms structured Strapi content into MDX documentation, navigation, sidebars, and a dynamic homepage.**
+
+### 🎯 Objective
+
+By completing this guide, you will:
+
+* **Configure Strapi Integration** — Connect Docusaurus to Strapi and define the content hierarchy.
+* **Generate MDX Documentation** — Convert published Strapi content into structured MDX files.
+* **Generate Navigation Data** — Build navigation files while preserving hierarchy and order.
+* **Generate Sidebars** — Convert navigation data into a Docusaurus-compatible sidebar configuration.
+* **Build the Documentation Homepage** — Present the Strapi content hierarchy through a dynamic homepage.
+* **Verify the Pipeline** — Validate the complete flow: **Strapi → MDX → Navigation → Sidebars → Homepage**.
+
+> **End Result:** Strapi becomes the **single source of content**, while automated generators create the documentation structure and configuration required by Docusaurus.
+---
+
+## Step 1 - Create the Strapi Integration Files
+
+This is the heart of the setup: scripts that fetch content from Strapi and turn it into Docusaurus docs + sidebars.
+
+### Environment variables — `.env`
+
+```bash title=".env"
+STRAPI_PRODUCTION_URL=https://knowledgebase-core.onrender.com
+
+STRAPI_ROOT=collections
+STRAPI_CHILDREN=sections
+STRAPI_NODE=contents
+```
+
+:::note[Content hierarchy]
+These three variables define your Strapi structure: **`collections` → `sections` → `contents`**. Every script below reads this hierarchy dynamically, so renaming your content types only means editing `.env`.
+:::
+
+---
+
+## Step 2 - Generate MDX files 
+
+> Source: `lib/generate-mdx.js`
+
+### 📦 Strapi → Docusaurus
+
+The script fetches the complete content hierarchy from Strapi:
+
+> **Collection → Section → Content**
+
+It generates an `.mdx` file for each level of the hierarchy:
+
+* 📑 **One `.mdx` file per collection**
+* 📑 **One `.mdx` file per section**
+* 📄 **One `.mdx` file per content item**
+
+#### 📁 Generated Structure
+
+```text
+docs/
+└── <collection-slug>/
+    ├── <collection-slug>.mdx
+    └── <section-slug>/
+        ├── <section-slug>.mdx
+        ├── <content-slug>.mdx
+        └── ...
+```
+
+#### 📝 MDX Files
+
+#### 📦 Collection
+
+Each collection generates a root-level `.mdx` file using its `mdxContent` field:
+
+```text
+docs/<collection-slug>/<collection-slug>.mdx
+```
+
+This serves as the **collection landing page**.
+
+#### 🧩 Section
+
+Each section generates its own `.mdx` file:
+
+```text
+docs/<collection-slug>/<section-slug>/<section-slug>.mdx
+```
+
+This serves as the **section landing page**.
+
+#### 📖 Content
+
+Each content item generates an `.mdx` file with the required frontmatter:
+
+```text
+docs/<collection-slug>/<section-slug>/<content-slug>.mdx
+```
+
+This represents the **individual content page**.
+
+#### 💻 Codebase
+
+The following implementation is responsible for fetching the content from Strapi, transforming the data, and generating the corresponding MDX documentation structure.
+
+The codebase is organized around three main responsibilities:
+
+1. **Fetch** — Retrieve collections, sections, and content from Strapi.
+2. **Transform** — Convert the Strapi data into Docusaurus-compatible MDX.
+3. **Generate** — Write the resulting `.mdx` files into the `docs/` directory.
+
+> Here's the full Source Code below
+
+<Accordion type="single" collapsible>
+  <AccordionItem value="full-code">
+    <AccordionTrigger>Show Full Code</AccordionTrigger>
+    <AccordionContent>
+
+```js
+'use strict';
+
+const fs = require('fs');
+const path = require('path');
+
+loadDotEnvIfPresent();
+
+// ---------------------------------------------------------------------------
+// Environment configuration
+// ---------------------------------------------------------------------------
+
+const STRAPI_URL = (process.env.STRAPI_PRODUCTION_URL || '').replace(/\/+$/, '');
+
+const STRAPI_ROOT = process.env.STRAPI_ROOT;
+const STRAPI_CHILDREN = process.env.STRAPI_CHILDREN;
+const STRAPI_NODE = process.env.STRAPI_NODE;
+
+const STRAPI_API_TOKEN = process.env.STRAPI_API_TOKEN || '';
+
+const OUTPUT_DIR = process.env.DOCS_OUTPUT_DIR
+    ? path.resolve(process.env.DOCS_OUTPUT_DIR)
+    : path.join(process.cwd(), 'docs');
+
+// ---------------------------------------------------------------------------
+// Validate configuration
+// ---------------------------------------------------------------------------
+
+function validateConfig() {
+    const required = {
+        STRAPI_PRODUCTION_URL: STRAPI_URL,
+        STRAPI_ROOT,
+        STRAPI_CHILDREN,
+        STRAPI_NODE,
+    };
+
+    for (const [key, value] of Object.entries(required)) {
+        if (!value) {
+            throw new Error(`Missing required environment variable: ${key}`);
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Entry point
+// ---------------------------------------------------------------------------
+
+main().catch((err) => {
+    console.error('\n❌ MDX generation failed:');
+    console.error(err.message);
+    process.exit(1);
+});
+
+async function main() {
+    validateConfig();
+
+    console.log(`→ Fetching content tree from ${STRAPI_URL} ...`);
+    console.log(
+        `→ Structure: ${STRAPI_ROOT} → ${STRAPI_CHILDREN} → ${STRAPI_NODE}`
+    );
+
+    const roots = await fetchAllRoots();
+
+    if (!roots.length) {
+        console.log(`⚠ No ${STRAPI_ROOT} found in Strapi.`);
+        resetOutputDir(OUTPUT_DIR);
+        return;
+    }
+
+    resetOutputDir(OUTPUT_DIR);
+
+    let fileCount = 0;
+    let nodeFileCount = 0;
+
+    // -----------------------------------------------------------------------
+    // ROOT (collection)
+    // -----------------------------------------------------------------------
+
+    for (const root of roots) {
+        const rootSlug = requireSlug(
+            root.slug,
+            STRAPI_ROOT,
+            root.name
+        );
+
+        const rootDir = path.join(OUTPUT_DIR, rootSlug);
+
+        fs.mkdirSync(rootDir, { recursive: true });
+
+        // ---------------------------------------------------------------
+        // Collection landing page: docs/<root-slug>/<root-slug>.mdx
+        // (was previously docs/<root-slug>/index.mdx)
+        // ---------------------------------------------------------------
+
+        const rootFilePath = path.join(rootDir, `${rootSlug}.mdx`);
+
+        const rootFrontmatter = buildFrontmatter({
+            title: root.name,
+            sidebar_label: root.name,
+            root_name: root.name,
+        });
+
+        fs.writeFileSync(
+            rootFilePath,
+            rootFrontmatter + (root.mdxContent ?? ''),
+            'utf8'
+        );
+
+        fileCount += 1;
+
+        console.log(
+            `  ✓ ${path.relative(process.cwd(), rootFilePath)}`
+        );
+
+        // -------------------------------------------------------------------
+        // CHILDREN (sections)
+        // -------------------------------------------------------------------
+
+        const children = normalizeList(root[STRAPI_CHILDREN]);
+
+        for (const child of children) {
+            const childSlug = requireSlug(
+                child.slug,
+                STRAPI_CHILDREN,
+                child.name
+            );
+
+            const childDir = path.join(rootDir, childSlug);
+
+            fs.mkdirSync(childDir, { recursive: true });
+
+            // ---------------------------------------------------------------
+            // Section landing page (NEW): docs/<root-slug>/<child-slug>/<child-slug>.mdx
+            // Rendered at e.g. /docs/react-js/react-the-complete-guide
+            // ---------------------------------------------------------------
+
+            const childFilePath = path.join(childDir, `${childSlug}.mdx`);
+
+            const childFrontmatter = buildFrontmatter({
+                title: child.name,
+                sidebar_label: child.name,
+                root_name: root.name,
+                child_name: child.name,
+            });
+
+            fs.writeFileSync(
+                childFilePath,
+                childFrontmatter + (child.mdxContent ?? ''),
+                'utf8'
+            );
+
+            fileCount += 1;
+
+            console.log(
+                `  ✓ ${path.relative(process.cwd(), childFilePath)}`
+            );
+
+            // -----------------------------------------------------------
+            // NODE (content items)
+            // -----------------------------------------------------------
+
+            const nodes = normalizeList(child[STRAPI_NODE]);
+
+            for (const node of nodes) {
+                const nodeSlug = requireSlug(
+                    node.slug,
+                    STRAPI_NODE,
+                    node.title || node.name
+                ).replace(/\.mdx$/i, '');
+
+                if (nodeSlug === childSlug) {
+                    console.warn(
+                        `  ⚠ ${STRAPI_NODE} slug "${nodeSlug}" collides with its parent ${STRAPI_CHILDREN} slug — it will overwrite the section landing page.`
+                    );
+                }
+
+                const filePath = path.join(
+                    childDir,
+                    `${nodeSlug}.mdx`
+                );
+
+                const frontmatter = buildFrontmatter({
+                    title: node.title || node.name,
+                    sidebar_label: node.title || node.name,
+                    root_name: root.name,
+                    child_name: child.name,
+                });
+
+                fs.writeFileSync(
+                    filePath,
+                    frontmatter + (node.mdxContent ?? ''),
+                    'utf8'
+                );
+
+                fileCount += 1;
+                nodeFileCount += 1;
+
+                console.log(
+                    `  ✓ ${path.relative(process.cwd(), filePath)}`
+                );
+            }
+        }
+    }
+
+    console.log(
+        `\n✅ Done. Wrote ${fileCount} MDX file(s) to ${path.relative(
+            process.cwd(),
+            OUTPUT_DIR
+        )}/`
+    );
+
+    if (nodeFileCount === 0) {
+        console.log(
+            `⚠ No ${STRAPI_NODE} were found under ${STRAPI_ROOT} → ${STRAPI_CHILDREN}.`
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Frontmatter
+// ---------------------------------------------------------------------------
+
+function buildFrontmatter(fields) {
+    const yamlString = (value) => JSON.stringify(value ?? '');
+
+    const lines = ['---'];
+
+    for (const [key, value] of Object.entries(fields)) {
+        lines.push(`${key}: ${yamlString(value)}`);
+    }
+
+    lines.push('---', '', '');
+
+    return lines.join('\n');
+}
+
+// ---------------------------------------------------------------------------
+// Fetch all ROOT entities
+// ---------------------------------------------------------------------------
+
+async function fetchAllRoots() {
+    const pageSize = 100;
+    let page = 1;
+    let all = [];
+
+    while (true) {
+        const query = [
+            `populate[${encodeURIComponent(STRAPI_CHILDREN)}][populate][${encodeURIComponent(STRAPI_NODE)}]=true`,
+            `pagination[page]=${page}`,
+            `pagination[pageSize]=${pageSize}`,
+        ].join('&');
+
+        const url =
+            `${STRAPI_URL}/api/${STRAPI_ROOT}?${query}`;
+
+        const json = await strapiFetch(url);
+
+        const items = normalizeList(json);
+
+        all = all.concat(items);
+
+        const pagination =
+            json &&
+            json.meta &&
+            json.meta.pagination;
+
+        if (
+            !pagination ||
+            page >= pagination.pageCount
+        ) {
+            break;
+        }
+
+        page += 1;
+    }
+
+    return all;
+}
+
+// ---------------------------------------------------------------------------
+// Strapi fetch
+// ---------------------------------------------------------------------------
+
+async function strapiFetch(url) {
+    const headers = {
+        'Content-Type': 'application/json',
+    };
+
+    if (STRAPI_API_TOKEN) {
+        headers.Authorization =
+            `Bearer ${STRAPI_API_TOKEN}`;
+    }
+
+    const response = await fetch(url, {
+        headers,
+    });
+
+    if (!response.ok) {
+        const body =
+            await response.text().catch(() => '');
+
+        throw new Error(
+            `Strapi request failed (${response.status} ${response.statusText}) for ${url}\n${body}`
+        );
+    }
+
+    return response.json();
+}
+
+// ---------------------------------------------------------------------------
+// Strapi v4 / v5 normalizers
+// ---------------------------------------------------------------------------
+
+function normalizeEntity(entity) {
+    if (!entity) return null;
+
+    return entity.attributes
+        ? {
+            id: entity.id,
+            ...entity.attributes,
+        }
+        : entity;
+}
+
+function normalizeList(value) {
+    if (!value) return [];
+
+    let array;
+
+    if (Array.isArray(value)) {
+        array = value;
+    } else if (Array.isArray(value.data)) {
+        array = value.data;
+    } else if (value.data) {
+        array = [value.data];
+    } else {
+        return [];
+    }
+
+    return array
+        .map(normalizeEntity)
+        .filter(Boolean);
+}
+
+// ---------------------------------------------------------------------------
+// Utilities
+// ---------------------------------------------------------------------------
+
+function requireSlug(slug, kind, label) {
+    if (
+        !slug ||
+        typeof slug !== 'string' ||
+        !slug.trim()
+    ) {
+        throw new Error(
+            `${kind} "${label || '(untitled)'}" is missing a slug.`
+        );
+    }
+
+    return slug.trim();
+}
+
+function resetOutputDir(dir) {
+    fs.rmSync(dir, {
+        recursive: true,
+        force: true,
+    });
+
+    fs.mkdirSync(dir, {
+        recursive: true,
+    });
+}
+
+// ---------------------------------------------------------------------------
+// Minimal .env loader
+// ---------------------------------------------------------------------------
+
+function loadDotEnvIfPresent() {
+    const envPath =
+        path.join(process.cwd(), '.env');
+
+    if (!fs.existsSync(envPath)) {
+        return;
+    }
+
+    const lines =
+        fs.readFileSync(envPath, 'utf8')
+            .split('\n');
+
+    for (const line of lines) {
+        const trimmed = line.trim();
+
+        if (
+            !trimmed ||
+            trimmed.startsWith('#')
+        ) {
+            continue;
+        }
+
+        const eq =
+            trimmed.indexOf('=');
+
+        if (eq === -1) {
+            continue;
+        }
+
+        const key =
+            trimmed.slice(0, eq).trim();
+
+        let value =
+            trimmed.slice(eq + 1).trim();
+
+        value =
+            value.replace(
+                /^["']|["']$/g,
+                ''
+            );
+
+        if (!(key in process.env)) {
+            process.env[key] = value;
+        }
+    }
+}
+
+```
+   </AccordionContent>
+  </AccordionItem>
+</Accordion>
+
+## Step 3 - Generate the Navigation Tree 
+
+> Source: `lib/generate-navigation.js`
+
+This script fetches the same **Collection → Section → Content** hierarchy from Strapi and converts it into a structured navigation tree.
+
+The generated navigation data is saved as:
+
+```text
+data/
+├── navigation.json
+└── navigation-config.json
+```
+
+### What It Does
+
+The script:
+
+1. **Fetches all collections** from Strapi, including their sections and content.
+2. **Builds a hierarchical navigation tree** following the same structure:
+   **Collection → Section → Content**
+3. **Preserves `sortOrder`** at every level.
+4. **Generates the URL path** for each content page.
+5. **Writes the navigation tree** to `navigation.json`.
+6. **Stores the Strapi field configuration** in `navigation-config.json`.
+
+### Generated Navigation
+
+(i) The resulting `navigation.json` follows this structure:
+
+```json
+[
+  {
+    "name": "Collection",
+    "slug": "collection",
+    "sortOrder": 1,
+    "sections": [
+      {
+        "name": "Section",
+        "slug": "section",
+        "sortOrder": 1,
+        "contents": [
+          {
+            "title": "Content",
+            "slug": "content",
+            "sortOrder": 1,
+            "path": "/docs/collection/section/content"
+          }
+        ]
+      }
+    ]
+  }
+]
+```
+
+(ii) The resulting `navigation-config.json` follows this structure:
+
+```json
+{
+  "root": "collections",
+  "children": "sections",
+  "node": "contents"
+}
+```
+
+> **In short:** Strapi provides the content hierarchy, and `generate-navigation.js` transforms that hierarchy into a reusable `navigation.json` that can power the **homepage, sidebar, and navbar** and `navigation-config.json` describes how that navigation data is structured..
+
+### 💻 Codebase
+
+The following implementation builds the **Docusaurus navigation tree** from the Strapi content hierarchy.
+
+It is organized around three main responsibilities:
+
+* **Fetch** — Retrieve collections, sections, and content from Strapi.
+* **Transform** — Convert the Strapi hierarchy into a structured navigation tree while preserving `sortOrder` and generating content paths.
+* **Generate** — Write the resulting navigation data to `navigation.json` and its configuration to `navigation-config.json`.
+
+> Here's the full Source Code below
+
+<Accordion type="single" collapsible>
+  <AccordionItem value="full-code">
+    <AccordionTrigger>Show Full Code</AccordionTrigger>
+    <AccordionContent>
+
+```js
+'use strict';
+
+const fs = require('fs');
+const path = require('path');
+
+loadEnvFile();
+
+// ----------------------------------------------------------------------------
+// Configuration
+// ----------------------------------------------------------------------------
+
+const STRAPI_URL =
+    (process.env.STRAPI_PRODUCTION_URL || '')
+        .replace(/\/+$/, '');
+
+const STRAPI_ROOT =
+    process.env.STRAPI_ROOT;
+
+const STRAPI_CHILDREN =
+    process.env.STRAPI_CHILDREN;
+
+const STRAPI_NODE =
+    process.env.STRAPI_NODE;
+
+const STRAPI_API_TOKEN =
+    process.env.STRAPI_API_TOKEN || '';
+
+const OUTPUT_DIR =
+    path.join(process.cwd(), 'data');
+
+const OUTPUT_FILE =
+    path.join(
+        OUTPUT_DIR,
+        'navigation.json'
+    );
+
+const PAGE_SIZE = 100;
+
+// ----------------------------------------------------------------------------
+// Validate configuration
+// ----------------------------------------------------------------------------
+
+function validateConfig() {
+    const required = {
+        STRAPI_PRODUCTION_URL: STRAPI_URL,
+        STRAPI_ROOT,
+        STRAPI_CHILDREN,
+        STRAPI_NODE,
+    };
+
+    for (const [key, value] of Object.entries(required)) {
+        if (!value) {
+            throw new Error(
+                `Missing required environment variable: ${key}`
+            );
+        }
+    }
+}
+
+// ----------------------------------------------------------------------------
+// Fetch JSON
+// ----------------------------------------------------------------------------
+
+async function fetchJSON(url) {
+    const headers = {
+        'Content-Type': 'application/json',
+    };
+
+    if (STRAPI_API_TOKEN) {
+        headers.Authorization =
+            `Bearer ${STRAPI_API_TOKEN}`;
+    }
+
+    const response =
+        await fetch(url, { headers });
+
+    if (!response.ok) {
+        const body =
+            await response.text()
+                .catch(() => '');
+
+        throw new Error(
+            `Strapi request failed (${response.status} ${response.statusText}) for ${url}\n${body}`
+        );
+    }
+
+    return response.json();
+}
+
+// ----------------------------------------------------------------------------
+// Strapi normalizers
+// ----------------------------------------------------------------------------
+
+function getAttrs(entity) {
+    if (!entity) return {};
+
+    return entity.attributes
+        ? entity.attributes
+        : entity;
+}
+
+function getRelationItems(relation) {
+    if (!relation) return [];
+
+    if (Array.isArray(relation)) {
+        return relation;
+    }
+
+    if (Array.isArray(relation.data)) {
+        return relation.data;
+    }
+
+    if (relation.data) {
+        return [relation.data];
+    }
+
+    return [];
+}
+
+function bySortOrder(a, b) {
+    return (
+        (a.sortOrder || 0) -
+        (b.sortOrder || 0)
+    );
+}
+
+// ----------------------------------------------------------------------------
+// Fetch all ROOT entities
+// ----------------------------------------------------------------------------
+
+async function fetchAllRoots() {
+    const roots = [];
+
+    let page = 1;
+    let pageCount = 1;
+
+    do {
+        const query = [
+            `populate[${encodeURIComponent(STRAPI_CHILDREN)}][populate][${encodeURIComponent(STRAPI_NODE)}]=true`,
+            `pagination[page]=${page}`,
+            `pagination[pageSize]=${PAGE_SIZE}`,
+        ].join('&');
+
+        const url =
+            `${STRAPI_URL}/api/${STRAPI_ROOT}?${query}`;
+
+        const json =
+            await fetchJSON(url);
+
+        const pageItems =
+            Array.isArray(json.data)
+                ? json.data
+                : [];
+
+        roots.push(...pageItems);
+
+        pageCount =
+            json.meta &&
+            json.meta.pagination
+                ? json.meta.pagination.pageCount
+                : 1;
+
+        page += 1;
+
+    } while (page <= pageCount);
+
+    return roots;
+}
+
+// ----------------------------------------------------------------------------
+// Build navigation
+// ----------------------------------------------------------------------------
+
+function buildNavigationTree(rawRoots) {
+    const tree =
+        rawRoots.map((rawRoot) => {
+            const root =
+                getAttrs(rawRoot);
+
+            const rootSlug =
+                root.slug;
+
+            // ---------------------------------------------------------------
+            // CHILDREN
+            // ---------------------------------------------------------------
+
+            const children =
+                getRelationItems(
+                    root[STRAPI_CHILDREN]
+                )
+                    .map((rawChild) => {
+                        const child =
+                            getAttrs(rawChild);
+
+                        const childSlug =
+                            child.slug;
+
+                        // ---------------------------------------------------
+                        // NODE
+                        // ---------------------------------------------------
+
+                        const nodes =
+                            getRelationItems(
+                                child[STRAPI_NODE]
+                            )
+                                .map((rawNode) => {
+                                    const node =
+                                        getAttrs(rawNode);
+
+                                    return {
+                                        title:
+                                            node.title ||
+                                            node.name,
+
+                                        slug:
+                                        node.slug,
+
+                                        sortOrder:
+                                            node.sortOrder ||
+                                            0,
+
+                                        path:
+                                            `/docs/${rootSlug}/${childSlug}/${node.slug}`,
+                                    };
+                                })
+                                .sort(bySortOrder);
+
+                        return {
+                            name:
+                            child.name,
+
+                            slug:
+                            childSlug,
+
+                            sortOrder:
+                                child.sortOrder ||
+                                0,
+
+                            [STRAPI_NODE]:
+                            nodes,
+                        };
+                    })
+                    .sort(bySortOrder);
+
+            return {
+                name:
+                root.name,
+
+                slug:
+                rootSlug,
+
+                sortOrder:
+                    root.sortOrder ||
+                    0,
+
+                [STRAPI_CHILDREN]:
+                children,
+            };
+        });
+
+    return tree.sort(bySortOrder);
+}
+
+// ----------------------------------------------------------------------------
+// Write navigation.json
+// ----------------------------------------------------------------------------
+const CONFIG_FILE = path.join(OUTPUT_DIR, 'navigation-config.json');
+
+function writeNavigationFile(navigationTree) {
+    if (!fs.existsSync(OUTPUT_DIR)) {
+        fs.mkdirSync(
+            OUTPUT_DIR,
+            {recursive: true}
+        );
+    }
+
+    fs.writeFileSync(
+        OUTPUT_FILE,
+        JSON.stringify(
+            navigationTree,
+            null,
+            2
+        ) + '\n',
+        'utf8'
+    );
+
+    const config = {
+        root: STRAPI_ROOT,
+        children: STRAPI_CHILDREN,
+        node: STRAPI_NODE,
+    };
+
+    fs.writeFileSync(
+        CONFIG_FILE,
+        JSON.stringify(
+            config,
+            null,
+            2
+        ) + '\n',
+        'utf8'
+    );
+}
+
+// ----------------------------------------------------------------------------
+// Main
+// ----------------------------------------------------------------------------
+
+async function main() {
+    validateConfig();
+
+    console.log(
+        `\n→ Fetching content tree from ${STRAPI_URL} ...`
+    );
+
+    console.log(
+        `→ Structure: ${STRAPI_ROOT} → ${STRAPI_CHILDREN} → ${STRAPI_NODE}`
+    );
+
+    const rawRoots =
+        await fetchAllRoots();
+
+    console.log(
+        `→ Fetched ${rawRoots.length} ${STRAPI_ROOT}(s) from Strapi.`
+    );
+
+    const navigationTree =
+        buildNavigationTree(rawRoots);
+
+    const childCount =
+        navigationTree.reduce(
+            (sum, root) =>
+                sum +
+                root[STRAPI_CHILDREN].length,
+            0
+        );
+
+    const nodeCount =
+        navigationTree.reduce(
+            (sum, root) =>
+                sum +
+                root[STRAPI_CHILDREN]
+                    .reduce(
+                        (childSum, child) =>
+                            childSum +
+                            child[STRAPI_NODE].length,
+                        0
+                    ),
+            0
+        );
+
+    writeNavigationFile(
+        navigationTree
+    );
+
+    console.log(
+        `✔ navigation.json generated: ` +
+        `${navigationTree.length} ${STRAPI_ROOT}(s), ` +
+        `${childCount} ${STRAPI_CHILDREN}(s), ` +
+        `${nodeCount} ${STRAPI_NODE}(s)`
+    );
+
+    console.log(
+        `✔ Written to: ${path.relative(
+            process.cwd(),
+            OUTPUT_FILE
+        )}\n`
+    );
+}
+
+main().catch((error) => {
+    console.error(
+        '\n✖ Failed to generate navigation.json'
+    );
+
+    console.error(
+        error.message || error
+    );
+
+    process.exit(1);
+});
+
+// ----------------------------------------------------------------------------
+// .env loader
+// ----------------------------------------------------------------------------
+
+function loadEnvFile() {
+    const envPath =
+        path.join(
+            process.cwd(),
+            '.env'
+        );
+
+    if (!fs.existsSync(envPath)) {
+        return;
+    }
+
+    const contents =
+        fs.readFileSync(
+            envPath,
+            'utf8'
+        );
+
+    contents
+        .split('\n')
+        .forEach((rawLine) => {
+            const line =
+                rawLine.trim();
+
+            if (
+                !line ||
+                line.startsWith('#')
+            ) {
+                return;
+            }
+
+            const equalsIndex =
+                line.indexOf('=');
+
+            if (equalsIndex === -1) {
+                return;
+            }
+
+            const key =
+                line
+                    .slice(
+                        0,
+                        equalsIndex
+                    )
+                    .trim();
+
+            let value =
+                line
+                    .slice(
+                        equalsIndex + 1
+                    )
+                    .trim();
+
+            if (
+                (value.startsWith('"') &&
+                    value.endsWith('"')) ||
+                (value.startsWith("'") &&
+                    value.endsWith("'"))
+            ) {
+                value =
+                    value.slice(
+                        1,
+                        -1
+                    );
+            }
+
+            if (!(key in process.env)) {
+                process.env[key] = value;
+            }
+        });
+}
+
+```
+   </AccordionContent>
+  </AccordionItem>
+</Accordion>
+
+
+
+## Step 4 - Generate the Sidebar 
+
+> Source: `lib/generate-sidebar.js`
+
+The sidebar generator converts the navigation data into the exact structure expected by Docusaurus.
+
+It reads:
+
+* `data/navigation.json` — the generated navigation hierarchy
+* `data/navigation-config.json` — the keys used to traverse that hierarchy
+
+The generator then:
+
+1. Sorts collections, sections, and content by `sortOrder`.
+2. Creates a unique **sidebar ID** for each `Collection → Section` pair.
+3. Extracts the content paths from each section.
+4. Removes the `/docs/` prefix from each path.
+5. Skips sections that contain no content.
+6. Returns a `{ sidebarId: [docPaths] }` object for `sidebars.js`.
+
+### Navigation → Sidebar
+
+```text
+navigation.json
+      │
+      ▼
+Collection
+      │
+      ├── Section
+      │     ├── Content
+      │     ├── Content
+      │     └── Content
+      │
+      └── Section
+            ├── Content
+            └── Content
+      │
+      ▼
+Generated Sidebar
+      │
+      └── { sidebarId: [docPaths] }
+```
+
+### Example
+
+A navigation structure such as:
+
+```text
+Collection: Django
+└── Section: REST Framework
+    ├── Serializers
+    ├── Views
+    └── Authentication
+```
+
+produces a sidebar similar to:
+
+```js
+{
+    "django-rest-framework": [
+        "django/rest-framework/serializers",
+        "django/rest-framework/views",
+        "django/rest-framework/authentication"
+    ]
+}
+```
+
+The resulting object can be consumed directly by Docusaurus through `sidebars.js`.
+
+### 💻 Codebase
+
+Generates Docusaurus sidebar configurations from the navigation data produced by the content-generation pipeline.
+
+##### Responsibilities
+
+* 📖 Reads `navigation.json` and `navigation-config.json`
+* 🔀 Sorts collections, sections, and content by `sortOrder`
+* 🧭 Builds a unique sidebar for each **Collection → Section**
+* 🔗 Converts content paths into Docusaurus-compatible document IDs
+* 🚫 Skips sections that contain no content
+* 📦 Returns the complete `sidebars` configuration object
+
+> Here's the full Source Code below
+
+<Accordion type="single" collapsible>
+  <AccordionItem value="full-code">
+    <AccordionTrigger>Show Full Code</AccordionTrigger>
+    <AccordionContent>
+
+```js
+const fs = require('fs');
+const path = require('path');
+
+function generateSidebars(
+    navigationPath = path.join(
+        __dirname,
+        '..',
+        'data',
+        'navigation.json'
+    )
+) {
+    const configPath = path.join(
+        __dirname,
+        '..',
+        'data',
+        'navigation-config.json'
+    );
+
+    const raw =
+        fs.readFileSync(
+            navigationPath,
+            'utf-8'
+        );
+
+    const navigation =
+        JSON.parse(raw);
+
+    const config =
+        JSON.parse(
+            fs.readFileSync(
+                configPath,
+                'utf-8'
+            )
+        );
+
+    const sidebars = {};
+
+    const childrenKey =
+        config.children;
+
+    const nodeKey =
+        config.node;
+
+    navigation
+        .slice()
+        .sort(
+            (a, b) =>
+                (a.sortOrder || 0) -
+                (b.sortOrder || 0)
+        )
+        .forEach((root) => {
+
+            const children =
+                root[childrenKey] || [];
+
+            children
+                .slice()
+                .sort(
+                    (a, b) =>
+                        (a.sortOrder || 0) -
+                        (b.sortOrder || 0)
+                )
+                .forEach((child) => {
+
+                    const sidebarId =
+                        `${root.slug}-${child.slug}`;
+
+                    const nodes =
+                        child[nodeKey] || [];
+
+                    const items =
+                        nodes
+                            .slice()
+                            .sort(
+                                (a, b) =>
+                                    (a.sortOrder || 0) -
+                                    (b.sortOrder || 0)
+                            )
+                            .map(
+                                (node) =>
+                                    node.path.replace(
+                                        /^\/?docs\//,
+                                        ''
+                                    )
+                            );
+
+                    if (
+                        items.length === 0
+                    ) {
+                        return;
+                    }
+
+                    sidebars[sidebarId] =
+                        items;
+                });
+        });
+
+    return sidebars;
+}
+
+module.exports =
+    generateSidebars;
+```
+   </AccordionContent>
+  </AccordionItem>
+</Accordion>
+
+---
+
+## Step 5 - Modify Default Files
+
+Now swap the default Docusaurus scaffolding for the project-specific setup.
+
+### 5.1 Replace default images
+
+Swap the contents of `static/img/` for just:
+
+- `favicon.ico`
+- `logo.svg`
+
+### 5.2 Sidebar wiring — `sidebars.js`
+> Delete everything from the "sidebars.js" and use this code for wiring
+```js title="sidebars.js"
+const generateSidebars = require('./lib/generate-sidebar');
+module.exports = generateSidebars();
+```
+
+### 5.3 Homepage — `src/pages/index.js`
+
+Builds the Docusaurus homepage and dynamically displays the **Collection → Section → Content** hierarchy from generated navigation data.
+
+#### Responsibilities
+
+* Reads generated navigation data and configuration.
+* Builds the hierarchical documentation table.
+* Generates dynamic links to collections, sections, and content pages.
+* Handles empty states when no documentation is available.
+* Applies the page layout and CSS module styling.
+
+> Here's the full Source Code below for `src/pages/index.js`
+
+<Accordion type="single" collapsible>
+  <AccordionItem value="full-code">
+    <AccordionTrigger>Show Full Code</AccordionTrigger>
+    <AccordionContent>
+
+```js
+import React from 'react';
+import Link from '@docusaurus/Link';
+import Layout from '@theme/Layout';
+import Heading from '@theme/Heading';
+import useDocusaurusContext from '@docusaurus/useDocusaurusContext';
+
+import navigationData from '@site/data/navigation.json';
+import navigationConfig from '@site/data/navigation-config.json';
+
+import styles from './index.module.css'; // Codebase 02 CSS module
+
+const projects = Array.isArray(navigationData) ? navigationData : [];
+
+const childrenKey = navigationConfig.children;
+const nodeKey = navigationConfig.node;
+
+// ----------------------------------------------------------------------------
+// Header labels from config keys (capitalised)
+// ----------------------------------------------------------------------------
+function capitalise(str) {
+    return str.charAt(0).toUpperCase() + str.slice(1);
+}
+
+const rootLabel = capitalise(navigationConfig.root);   // e.g. "Projects"
+const childrenLabel = capitalise(childrenKey);          // e.g. "Modules"
+const nodeLabel = capitalise(nodeKey);                  // e.g. "Tasks"
+
+// ----------------------------------------------------------------------------
+// Endpoint helpers
+// Project -> /docs/<project-slug>
+// Module  -> /docs/<project-slug>/<module-slug>
+// (previously these jumped straight to the first task's path; now they open
+// the project/module landing pages generated by generate-navigation.js)
+// ----------------------------------------------------------------------------
+function getProjectEndpoint(project) {
+    return `/docs/${project.slug}`;
+}
+
+function getModuleEndpoint(project, module) {
+    return `/docs/${project.slug}/${module.slug}`;
+}
+
+function getTaskEndpoint(task) {
+    return task.path;
+}
+
+// ----------------------------------------------------------------------------
+// Flatten projects → modules → tasks into row descriptors (unchanged)
+// ----------------------------------------------------------------------------
+function buildRows(allProjects) {
+    const rows = [];
+
+    allProjects.forEach((project) => {
+        const modules = project[childrenKey] ?? [];
+
+        const moduleRows = (modules.length > 0 ? modules : [null]).map((module) => {
+            const tasks = module ? module[nodeKey] ?? [] : [];
+            return {
+                module,
+                tasks: tasks.length > 0 ? tasks : [null],
+            };
+        });
+
+        const projectRowSpan = moduleRows.reduce(
+            (sum, m) => sum + m.tasks.length,
+            0
+        );
+
+        let projectRendered = false;
+
+        moduleRows.forEach((moduleRow) => {
+            let moduleRendered = false;
+
+            moduleRow.tasks.forEach((task) => {
+                rows.push({
+                    project,
+                    module: moduleRow.module,
+                    task,
+                    showProject: !projectRendered,
+                    projectRowSpan,
+                    showModule: !moduleRendered,
+                    moduleRowSpan: moduleRow.tasks.length,
+                });
+
+                projectRendered = true;
+                moduleRendered = true;
+            });
+        });
+    });
+
+    return rows;
+}
+
+// ----------------------------------------------------------------------------
+// Empty state
+// ----------------------------------------------------------------------------
+function EmptyState() {
+    return (
+        <section className={styles.hero}>
+            <p className={styles.kicker}>Generated from your Strapi content</p>
+            <Heading as="h1" className={styles.headline}>
+                Where content meets automation
+            </Heading>
+            <p className={styles.subhead}>
+                No docs published yet. Run <code>npm run generate:navigation</code> after
+                publishing content in Strapi.
+            </p>
+        </section>
+    );
+}
+
+// ----------------------------------------------------------------------------
+// Table component
+// ----------------------------------------------------------------------------
+function DocsTable() {
+    if (projects.length === 0) {
+        return <EmptyState />;
+    }
+
+    const rows = buildRows(projects);
+
+    return (
+        <>
+            <section className={styles.hero}>
+                <p className={styles.kicker}>Generated from your Strapi content</p>
+                <Heading as="h1" className={styles.headline}>
+                    Where content meets automation
+                </Heading>
+                <p className={styles.subhead}>
+                    Every collection, section and entry below is pulled straight from
+                    Strapi and rebuilt the moment content changes — MDX, navigation and
+                    search stay in sync without a manual step, all the way through to
+                    deployment.
+                </p>
+            </section>
+
+            <section className={styles.registerWrap}>
+                <table className={styles.register}>
+                    <colgroup>
+                        <col className={styles.colCollection} />
+                        <col className={styles.colSection} />
+                        <col className={styles.colEntry} />
+                    </colgroup>
+                    <thead>
+                    <tr>
+                        <th scope="col" className={styles.headCell}>{rootLabel}</th>
+                        <th scope="col" className={styles.headCell}>{childrenLabel}</th>
+                        <th scope="col" className={styles.headCell}>{nodeLabel}</th>
+                    </tr>
+                    </thead>
+                    <tbody>
+                    {rows.map((row, index) => {
+                        const key = [
+                            row.project.slug,
+                            row.module ? row.module.slug : 'no-module',
+                            row.task ? row.task.slug : 'no-task',
+                            index,
+                        ].join('-');
+
+                        return (
+                            <tr key={key}>
+                                {row.showProject && (
+                                    <td
+                                        rowSpan={row.projectRowSpan}
+                                        className={styles.collectionCell}
+                                    >
+                                        <Link to={getProjectEndpoint(row.project)}>
+                                            {row.project.name}
+                                        </Link>
+                                    </td>
+                                )}
+
+                                {row.module ? (
+                                    row.showModule && (
+                                        <td
+                                            rowSpan={row.moduleRowSpan}
+                                            className={styles.sectionCell}
+                                        >
+                                            <Link
+                                                to={getModuleEndpoint(row.project, row.module)}
+                                                className={styles.sectionLink}
+                                            >
+                                                {row.module.name}
+                                            </Link>
+                                        </td>
+                                    )
+                                ) : (
+                                    <td className={styles.sectionCell}>—</td>
+                                )}
+
+                                {row.task ? (
+                                    <td className={styles.entryCell}>
+                                        <Link
+                                            to={getTaskEndpoint(row.task)}
+                                            className={styles.entryLink}
+                                        >
+                                            {row.task.title}
+                                        </Link>
+                                    </td>
+                                ) : (
+                                    <td className={styles.entryCell}>—</td>
+                                )}
+                            </tr>
+                        );
+                    })}
+                    </tbody>
+                </table>
+            </section>
+        </>
+    );
+}
+
+// ----------------------------------------------------------------------------
+// Layout wrapper
+// ----------------------------------------------------------------------------
+const Index = () => {
+    const { siteConfig } = useDocusaurusContext();
+
+    return (
+        <Layout title={siteConfig.title} description={siteConfig.tagline}>
+            <main className={styles.main}>
+                <DocsTable />
+            </main>
+        </Layout>
+    );
+};
+
+export default Index;
+```
+   </AccordionContent>
+  </AccordionItem>
+</Accordion>
+
+> Here's the full Source Code below for `src/pages/index.module.css`
+
+<Accordion type="single" collapsible>
+  <AccordionItem value="full-code">
+    <AccordionTrigger>Show Full Code</AccordionTrigger>
+    <AccordionContent>
+
+```js
+/* ==========================================================================
+   01. FONTS
+   ========================================================================== */
+
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600&family=IBM+Plex+Sans:wght@400;500&family=IBM+Plex+Mono:wght@400;500&display=swap');
+
+
+/* ==========================================================================
+   02. THEME / DESIGN TOKENS
+   ========================================================================== */
+
+/* ---------- Light theme (default) ---------- */
+
+.main {
+  --ink: #0e1013;
+  --ink-dim: #4a4f5a;
+  --ink-faint: #6b7280;
+
+  --bg: #f9fafb;
+  --panel: #f3f4f6;
+
+  --line: #d1d5db;
+  --line-strong: #9ca3af;
+
+  --section: #0d9488;
+  --section-dim: rgba(13, 148, 136, 0.10);
+
+  --entry: #d97706;
+  --entry-dim: rgba(217, 119, 6, 0.08);
+
+  background: var(--bg);
+  color: var(--ink);
+  font-family: 'IBM Plex Sans', system-ui, sans-serif;
+}
+
+
+/* ---------- Dark theme ---------- */
+
+html[data-theme='dark'] .main {
+  --ink: #e7e4dc;
+  --ink-dim: #8d93a0;
+  --ink-faint: #565c68;
+
+  --bg: #0e1013;
+  --panel: #14171c;
+
+  --line: #262b33;
+  --line-strong: #343941;
+
+  --section: #4fd1c5;
+  --section-dim: rgba(79, 209, 197, 0.14);
+
+  --entry: #e8b04b;
+  --entry-dim: rgba(232, 176, 75, 0.12);
+}
+
+
+/* ==========================================================================
+   03. BASE / PAGE LAYOUT
+   ========================================================================== */
+
+.main {
+  padding: 4rem 1.5rem 6rem;
+}
+
+
+/* ==========================================================================
+   04. HERO
+   ========================================================================== */
+
+.hero {
+  max-width: 640px;
+  margin: 0 auto 3.5rem;
+  padding-left: 1.1rem;
+  border-left: 2px solid var(--section);
+}
+
+
+/* ---------- Hero: kicker ---------- */
+
+.kicker {
+  margin: 0 0 0.9rem;
+  font-size: 0.85rem;
+  color: var(--ink-dim);
+  font-family: 'IBM Plex Mono', monospace;
+}
+
+
+/* ---------- Hero: headline ---------- */
+
+.headline {
+  margin: 0 0 1rem;
+
+  font-family: 'Space Grotesk', system-ui, sans-serif;
+  font-weight: 600;
+  font-size: clamp(2rem, 4vw, 2.75rem);
+  line-height: 1.15;
+  letter-spacing: -0.01em;
+
+  color: var(--ink);
+}
+
+
+/* ---------- Hero: description ---------- */
+
+.subhead {
+  margin: 0;
+
+  font-size: 1.05rem;
+  line-height: 1.65;
+  color: var(--ink-dim);
+}
+
+
+/* ---------- Hero: inline code ---------- */
+
+.subhead code {
+  padding: 0.1rem 0.4rem;
+
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 0.92em;
+
+  color: var(--ink);
+}
+
+
+/* ==========================================================================
+   05. REGISTER / TABLE CONTAINER
+   ========================================================================== */
+
+.registerWrap {
+  max-width: 1080px;
+  margin: 0 auto;
+
+  overflow-x: auto;
+
+  border-top: 1px solid var(--line-strong);
+  border-bottom: 1px solid var(--line-strong);
+}
+
+
+/* ==========================================================================
+   06. REGISTER / TABLE
+   ========================================================================== */
+
+.register {
+  width: 100%;
+  min-width: 720px;
+
+  border-collapse: collapse;
+
+  font-size: 0.95rem;
+}
+
+
+/* ---------- Table column widths ---------- */
+
+.colCollection {
+  width: 26%;
+}
+
+.colSection {
+  width: 32%;
+}
+
+.colEntry {
+  width: 42%;
+}
+
+
+/* ==========================================================================
+   07. TABLE HEADER
+   ========================================================================== */
+
+.headCell {
+  padding: 0.85rem 1.25rem;
+
+  text-align: left;
+  font-weight: 500;
+  font-size: 0.8rem;
+
+  color: var(--ink-faint);
+
+  border-bottom: 1px solid var(--line-strong);
+}
+
+
+/* ==========================================================================
+   08. TABLE GROUPS
+   ========================================================================== */
+
+/* Separator between collection groups */
+
+.collectionGroup + .collectionGroup tr:first-child th,
+.collectionGroup + .collectionGroup tr:first-child td {
+  border-top: 1px solid var(--line-strong);
+}
+
+
+/* ==========================================================================
+   09. TABLE CELLS
+   ========================================================================== */
+
+/* ---------- Collection ---------- */
+
+.collectionCell {
+  padding: 1.1rem 1.25rem;
+
+  text-align: left;
+  vertical-align: top;
+
+  background: var(--panel);
+
+  border-right: 1px solid var(--line-strong);
+
+  font-family: 'Space Grotesk', system-ui, sans-serif;
+  font-weight: 600;
+  font-size: 1.05rem;
+
+  color: var(--ink);
+}
+
+
+/* ---------- Section ---------- */
+
+.sectionCell {
+  padding: 0.9rem 1.25rem;
+
+  text-align: left;
+  vertical-align: top;
+
+  font-weight: 400;
+
+  border-right: 1px solid var(--line);
+  border-left: 2px solid var(--section);
+}
+
+
+/* ---------- Entry ---------- */
+
+.entryCell {
+  padding: 0.9rem 1.25rem;
+
+  vertical-align: top;
+
+  border-left: 2px solid var(--entry);
+}
+
+
+/* ==========================================================================
+   10. TABLE ROW STATES
+   ========================================================================== */
+
+/* Row separators */
+
+.register tr:not(:last-child) .sectionCell,
+.register tr:not(:last-child) .entryCell {
+  border-bottom: 1px solid var(--line);
+}
+
+
+/* Hover */
+
+.register tbody tr:hover .entryCell {
+  background: var(--entry-dim);
+}
+
+
+/* ==========================================================================
+   11. LINKS
+   ========================================================================== */
+
+/* ---------- Shared link styles ---------- */
+
+.sectionLink,
+.entryLink {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 0.92rem;
+
+  text-decoration: none;
+
+  border-bottom: 1px solid transparent;
+
+  color: var(--ink-dim);
+}
+
+
+/* ---------- Section link ---------- */
+
+.sectionLink {
+  color: var(--ink);
+}
+
+.sectionLink:hover,
+.sectionLink:focus-visible {
+  color: var(--section);
+  border-bottom-color: var(--section);
+}
+
+
+/* ---------- Entry link ---------- */
+
+.entryLink:hover,
+.entryLink:focus-visible {
+  color: var(--entry);
+  border-bottom-color: var(--entry);
+}
+
+
+/* ---------- Non-clickable section ---------- */
+
+.sectionLinkless {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 0.92rem;
+  color: var(--ink-faint);
+}
+
+
+/* ==========================================================================
+   12. EMPTY STATE
+   ========================================================================== */
+
+.emptyCell {
+  padding: 0.9rem 1.25rem;
+
+  color: var(--ink-faint);
+  font-style: italic;
+}
+
+
+/* ==========================================================================
+   13. ACCESSIBILITY / FOCUS
+   ========================================================================== */
+
+a.sectionLink:focus-visible,
+a.entryLink:focus-visible {
+  outline: 2px solid var(--section);
+  outline-offset: 2px;
+}
+
+
+/* ---------- Reduced motion ---------- */
+
+@media (prefers-reduced-motion: reduce) {
+  .register * {
+    transition: none !important;
+  }
+}
+
+```
+   </AccordionContent>
+  </AccordionItem>
+</Accordion>
+
+:::tip[What just happened?]
+1. **`generate:mdx`** → pulls Strapi content and writes `.mdx` files into `docs/`
+2. **`generate:navigation`** → builds `data/navigation.json` + `data/navigation-config.json`
+3. **`start`** → boots the Docusaurus dev server using the generated docs & sidebar
+   :::
+
+Your site should now be live at `http://localhost:3000`, with docs, sidebars, and the homepage all populated straight from Strapi. 🎊
+
+:::note[Going forward]
+Next time, after publishing content in Strapi, only need to run `npm run start` to restart the dev server. No need to run `npm run generate:mdx` and `npm run generate:navigation` them again.
+:::
+
