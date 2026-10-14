@@ -54,63 +54,77 @@
   Responsive Sidebar Width
   =============================== */
 
-/* Default / small screens */
-:root {
+/* Defined on html:root (not plain :root) so it always beats the theme's own
+   `:root { --doc-sidebar-width: 300px }`, whatever order the CSS loads in.
+   <main> reserves space using this same variable, so if the theme's 300px
+   wins, the sidebar looks narrow but the content area still leaves 300px. */
+html:root {
   --doc-sidebar-width: 220px;
 }
 
-/* Small → Medium */
 @media (min-width: 768px) {
-  :root {
+  html:root {
     --doc-sidebar-width: 200px;
   }
-
-  .theme-doc-sidebar-container {
-    --doc-sidebar-width: 200px !important;
-  }
 }
 
-/* Medium → Large */
 @media (min-width: 1200px) {
-  :root {
+  html:root {
     --doc-sidebar-width: 220px;
   }
-
-  .theme-doc-sidebar-container {
-    --doc-sidebar-width: 220px !important;
-  }
 }
 
-/* Large / Wide monitors */
 @media (min-width: 1600px) {
-  :root {
+  html:root {
     --doc-sidebar-width: 350px;
   }
-
-  .theme-doc-sidebar-container {
-    --doc-sidebar-width: 350px !important;
-  }
 }
 
-/* Allow the documentation container to use available width */
+/* ===============================
+  Docs Content + TOC Layout
+  =============================== */
+
+/* Why the odd `:not(#\#)` chains: Docusaurus compiles its own rules with
+   extra `:not(#\#)` terms (it flattens CSS cascade layers that way), which
+   gives them ID-level specificity. A plain `!important` rule of ours loses to
+   `.docItemCol { max-width: 75% !important }` in that case. Three of them
+   here outrank the theme's two, so these overrides win in every setup. */
+
 @media (min-width: 997px) {
-  .container {
-    max-width: 100%;
+  /* <main> > .container > .row : stop the container from capping/centering
+     the docs area (Infima caps it at 1140px / 1320px and centers it) */
+  html:not(#\#):not(#\#):not(#\#) [class*='docMainContainer'] > .container {
+    max-width: 100% !important;
+    margin-left: 0 !important;
+    margin-right: 0 !important;
+  }
+
+  /* Content column: drop the 75% cap, fill whatever the TOC doesn't use */
+  html:not(#\#):not(#\#):not(#\#) [class*='docItemCol'] {
+    max-width: none !important;
+    flex: 1 1 0 !important;
+    min-width: 0;
+    /* breathing room for the content only (the TOC column is untouched) */
+    padding-left: 3rem !important;
+    padding-right: 3.5rem !important;
+  }
+
+  /* TOC column: fixed width instead of 25% of the row */
+  html:not(#\#):not(#\#):not(#\#) [class*='docItemCol'] + .col--3 {
+    flex: 0 0 240px !important;
+    max-width: 240px !important;
   }
 }
 
+@media (min-width: 1600px) {
+  /* More room on large monitors */
+  html:not(#\#):not(#\#):not(#\#) [class*='docItemCol'] {
+    padding-left: 4.5rem !important;
+    padding-right: 5rem !important;
+  }
 
-
-/* =========================
-   Navbar Logo
-   ========================= */
-
-/* Light mode */
-.navbar__logo img {
-  content: url('/img/logo-light.svg');
-}
-
-/* Dark mode */
-[data-theme='dark'] .navbar__logo img {
-  content: url('/img/logo-dark.svg');
+  html:not(#\#):not(#\#):not(#\#) [class*='docItemCol'] + .col--3 {
+    flex-basis: 280px !important;
+    max-width: 280px !important;
+  }
 }
